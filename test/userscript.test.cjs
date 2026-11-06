@@ -21,8 +21,8 @@ function sliceBalanced(src, startMarker, open = '{', close = '}') {
 }
 
 /* ------------------------------------------------------------------ 1. 版本与构建白名单 */
-assert.ok(/@version\s+3\.3\.6/.test(js), '@version should be 3.3.6');
-assert.ok(/__pbAfkVersion='3\.3\.6'/.test(js), 'runtime version marker should be 3.3.6');
+assert.ok(/@version\s+3\.3\.7/.test(js), '@version should be 3.3.7');
+assert.ok(/__pbAfkVersion='3\.3\.7'/.test(js), 'runtime version marker should be 3.3.7');
 const builds = /const SUPPORTED_BUILDS = new Set\(\[([^\]]*)\]\)/.exec(js)[1];
 for (const b of ['mvob1c8t', 'mvpdimhl', 'mvpjh5lt', 'mvpt1dlr', 'mvxmqseg', 'mvywlxn8', 'mw4qh5au']) {
   assert.ok(builds.includes("'" + b + "'"), 'build whitelisted: ' + b);
@@ -114,7 +114,7 @@ for (const kind of ['dojo', 'shroom', 'challenge', 'cursed']) {
 console.log('ok  mapTaskPolicy: comet / expedition / tower-trick gates');
 
 /* ------------------------------------------------------------------ 4. 优先级 */
-const prioStart = js.indexOf("priority:(item.kind==='exp'");
+const prioStart = js.indexOf("priority:(item.kind==='tower'&&item.data?.sub==='leave')");
 assert.ok(prioStart > 0, 'priority expression found');
 const prioEnd = js.indexOf('});', prioStart);
 const prioExpr = js.slice(prioStart + 'priority:'.length, prioEnd);
@@ -139,4 +139,97 @@ for (const key of ['autoComet', 'autoExpedition', 'autoExtract', 'autoTowerTrick
 assert.ok(/"远征结算"/.test(js) || js.includes('远征结算'), 'expedition result modal handler present');
 console.log('ok  defaults + panel toggles + expedition result modal handler');
 
-console.log('\nall userscript assertions passed');
+/* ------------------------------------------------------------------ 3.6 紫苑塔：下楼 / 深层 */
+const leave = { kind: 'tower', data: { sub: 'leave' } };
+const portal = { kind: 'tower', data: { sub: 'portal' } };
+const towerRun = (over = {}) => ({ ...run0, tower: { floor: 5, state: 'clear', roof: false, beyond: false, ...over } });
+assert.strictEqual(policy(leave, S, towerRun()), null, 'leave is off by default');
+const SL = { ...S, autoTowerLeave: true, towerStopFloor: '5' };
+assert.strictEqual(policy(leave, SL, towerRun()).label, '收工下楼（结算胜利）', 'leave once the stop floor is cleared');
+assert.strictEqual(policy(leave, SL, towerRun({ floor: 4 })), null, 'not yet at the stop floor');
+assert.strictEqual(policy(leave, SL, towerRun({ state: 'wave' })), null, 'leave only when the floor is cleared');
+assert.strictEqual(policy(leave, { ...SL, towerStopFloor: '' }, towerRun()), null, 'empty stop floor = never leave');
+assert.ok(policy(portal, S, towerRun({ roof: true })) !== null, 'portal goes deeper by default');
+assert.strictEqual(policy(portal, { ...S, autoTowerDeep: false }, towerRun({ roof: true })), null,
+  'autoTowerDeep=false stays put');
+assert.strictEqual(policy(portal, S, towerRun({ roof: true, state: 'roof' })), null,
+  'portal waits for the roof fight to end');
+console.log('ok  tower: stairs / altar / trick / portal / leave gating');
+
+/* ------------------------------------------------------------------ 4.1 下楼优先级 */
+assert.strictEqual(prio({ kind: 'tower', data: { sub: 'leave' } }, false, order), -2.4,
+  'leave outranks the portal once armed');
+console.log('ok  priority: tower leave -2.4');
+
+/* ------------------------------------------------------------------ 5.1 3.3.7 面板与默认值 */
+assert.ok(/autoTowerDeep:true, autoTowerLeave:false, towerStopFloor:'', autoClaim:true/.test(js), '3.3.7 defaults');
+for (const key of ['autoTowerDeep', 'autoTowerLeave', 'autoClaim']) {
+  assert.ok(js.includes("'" + key + "'],"), 'settings panel exposes ' + key);
+}
+assert.ok(js.includes("'towerStopFloor','number'"), 'settings panel exposes the stop floor number field');
+console.log('ok  3.3.7 defaults + panel fields');
+
+/* ------------------------------------------------------------------ 6. 自动领取 ticker */
+const claimSrc = sliceBalanced(js, 'async function claimTick(');
+function makeClaimEnv(runState = 'over') {
+  const calls = [];
+  const meta = {
+    account: { token: 'TOKEN' },
+    profile: { events: {} },
+    claimTask: (p, s) => { calls.push('task:' + p + s); return p === 'daily'; },
+    eventReady: () => 3,
+    adopt: () => calls.push('adopt'),
+  };
+  const backend = {
+    events: () => [{ id: 'halloween26', name: 'Halloween' }],
+    claimEventTrack: async (a, e, step) => { calls.push('track:' + e + ':' + step); return {}; },
+    eventView: async () => ({ quests: [{ id: 'q1', name: 'Q1' }, { id: 'q2' }] }),
+    claimEventQuest: async (a, e, q) => { calls.push('quest:' + q); return {}; },
+    claimSeasonAwards: async () => { calls.push('season'); return {}; },
+  };
+  const app = { run: { state: runState }, meta, backend };
+  const claimState = { last: performance.now() - 60000, busy: false, questBackoff: new Map(), seasonAt: 0, hits: 0 };
+  const tick = new Function(
+    'opt', 'app', 'editOpen', 'stoppedReason', 'log', 'updatePanel', 'available', 'visible', 'document', 'claimState',
+    claimSrc + '\nreturn claimTick;'
+  )(
+    { autoClaim: true }, app, false, '', () => {}, () => {}, () => true, () => true,
+    { querySelectorAll: () => [] }, claimState
+  );
+  return { tick, calls, claimState, optHolder: null };
+}
+
+(async () => {
+  // 6.1 局外：每日/每周任务 + 事件积分 + 事件任务 + 赛季
+  const env = makeClaimEnv('over');
+  await env.tick();
+  assert.ok(env.calls.includes('task:daily0'), 'claims daily slot 0');
+  assert.ok(env.calls.includes('task:weekly0'), 'asks for weekly slots too');
+  assert.ok(env.calls.includes('track:halloween26:-1'), 'claims the whole event track at once');
+  assert.ok(env.calls.includes('quest:q1') && env.calls.includes('quest:q2'), 'claims unclaimed event quests');
+  assert.ok(env.calls.includes('season'), 'tries the season awards');
+  assert.ok(env.calls.filter(c => c === 'adopt').length >= 3, 'adopts the returned profiles');
+
+  // 6.2 对局中不领取（避免抢按键）
+  const playing = makeClaimEnv('play');
+  await playing.tick();
+  assert.deepStrictEqual(playing.calls, [], 'never claims while a run is playing');
+
+  // 6.3 45 秒节流
+  const throttled = makeClaimEnv('over');
+  await throttled.tick();
+  const first = throttled.calls.length;
+  await throttled.tick();
+  assert.strictEqual(throttled.calls.length, first, 'second call inside the cooldown does nothing');
+
+  // 6.4 事件任务失败后退避 30 分钟
+  const backoff = makeClaimEnv('over');
+  backoff.claimState.questBackoff.set('halloween26|q1', Date.now() + 60000);
+  await backoff.tick();
+  assert.ok(!backoff.calls.includes('quest:q1'), 'quest in backoff is skipped');
+  assert.ok(backoff.calls.includes('quest:q2'), 'other quests still claimed');
+
+  console.log('ok  claim ticker: tasks / event track / event quests / season / throttling / backoff');
+  console.log('\nall userscript assertions passed');
+})();
+

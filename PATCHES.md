@@ -225,3 +225,75 @@ node test/userscript.test.cjs         # 策略 / 优先级 / 连接器正则断�
 2. `coop` 合作对局没有适配（`run.endless` 为假，会被当成经典模式处理）。
 3. `dojo` 道馆挑战需要弹窗交互，未接入。
 4. 裂缝（`rifts`）内部没有特殊处理：进裂缝后仍按普通地图寻路。
+
+---
+
+## 3.3.7 — 爬塔全自动 + 任务/奖励自动领取
+
+### 一、紫苑塔现在能自己爬完
+
+塔的性质（读包）：`run.tower` 有 `floor` / `state` / `roof` / `beyond` / `wave`，
+`state` 走 `intro → wave → guard → clear`，屋顶固定是 `roof`（打完耿鬼才转 `clear`）；
+`advance()` 里 `floor===7 → roof`，屋顶走传送门后 `floor=8` 起算「深层（Más Allá）」，深层没有尽头。
+
+3.3.5 只做了「清完本层 → 上楼楼梯」和「祭坛/传送门」，`leave` 被硬拦死。3.3.7 补齐：
+
+| 目标 | 规则 |
+|---|---|
+| `tower` + `sub:'stairs'` 上楼楼梯 | `state==='clear'` 才去（沿用） |
+| `tower` + `sub:'altar'` 塔内献祭 | 同上，且受「祭坛充能」开关控制（沿用） |
+| `tower` + `sub:'trick'` 耿鬼墓碑 | 受 `autoTowerTrick` 控制（默认开） |
+| `tower` + `sub:'portal'` 塔顶传送门 | 受 `autoTowerDeep`（默认开）控制：屋顶清完就进深层继续爬 |
+| `tower` + `sub:'leave'` 收工下楼 | 默认**永不点**；打开 `autoTowerLeave` 且 `towerStopFloor` 填了数字时，到达该层且本层清完才点，优先级 **-2.4**（高于传送门/撤离点） |
+
+`towerStopFloor` 参考值：**7 = 打完屋顶耿鬼就下楼结算**（屋顶的 `floor` 仍是 7）；`12` = 深层再爬 4 层后收工；留空 = 一直往深层爬。
+
+状态栏现在固定显示 `紫苑塔 第N层/屋顶/深层N层 · 刷怪中/守卫战/已清·楼梯已开 · 波 x/3`。
+
+> 塔里的 Silph 探照是**自动脉冲**（`reveal()` 由楼层逻辑按半径触发），蜡烛由楼层事件点亮，都不需要按键，所以挂机不用额外处理。
+
+### 二、任务／奖励自动领取
+
+游戏的任务面（从代码与真实 `/profile` 备份里确认的结构）：
+
+- `profile.daily` / `profile.weekly`：`{ids:[3],idx,prog:[3],claimed:[4],rerolls}`
+- `profile.quests`：`{id:1}` 成就领取记录
+- `profile.events[<eventId>]`：`{pts, got:[步骤], quests:[已领任务], best, c:{floor,tricks,candles,reveals}}`
+- 后端方法：`claimTask(period,slot)`、`claimQuest(id)`、`claimEventTrack(ev,-1)`（-1=全部）、`claimEventQuest(ev,id)`、`claimSeasonAwards()`、`clanClaim()`、`claimMail(id)`
+
+助手（局外、每 45 秒、串行）依次做：
+
+1. `meta.claimTask('daily'|'weekly', 0..2)`——可领性由游戏自己的 `MetaStore` 判定，助手不猜。
+2. 对每个在线事件：`meta.eventReady(id)>0` 时 `claimEventTrack(id,-1)` 一次领完整个积分轨。
+3. 事件任务：`eventView()` 里未领取的逐个 `claimEventQuest`；失败的记 30 分钟退避，不刷接口。
+4. `claimSeasonAwards()`：每 6 小时试一次。
+5. DOM 兜底：页面上出现 `.q-claim / .cl-rw-btn / .tk-claim / .ev-claim` 就点。
+6. 每次成功后 `meta.adopt(profile)`，并写助手日志。
+
+**对局中一律不领**（`run.state==='play'` 直接返回），避免和按键抢焦点。
+面板状态栏多一行 `任务可领：每日/周 N · 事件 M · 成就 K`（5 秒缓存，不刷接口）。
+
+开关：`autoClaim`（默认开，面板「地图任务」区）。
+
+### 三、验证
+
+```bash
+node --check pokebonk-afk.user.js
+node test/userscript.test.cjs
+```
+
+新增断言：塔的 `leave/portal/stairs` 门控（默认不动、到层才动、未清完不动、`autoTowerDeep` 关闭时留屋顶）、`leave` 优先级 -2.4、3.3.7 默认值与面板字段，以及**领取 ticker 的行为测试**（切出 `claimTick` 用假 `app/meta/backend` 跑）：
+
+- 局外会调 `claimTask` 每日/每周、`claimEventTrack(ev,-1)`、逐个 `claimEventQuest`、`claimSeasonAwards` 并 `adopt`；
+- `run.state==='play'` 时**一次都不调**；
+- 45 秒内第二次调用不动作；
+- 退避中的事件任务被跳过、其它照领。
+
+**未验证**：真机跑图与真实账号的领取回报（需要进游戏）。所有网络调用都走游戏自己的 `backend`，失败只写日志、不重试轰炸。
+
+### 四、已知限制
+
+1. 成就（`profile.quests`）没有暴露「可领列表」的接口，助手只显示可领数量 + DOM 兜底点击，不盲调 `claimQuest`。
+2. `clanClaim` / `claimMail` 没做（前者要战队视图数据，后者要邮件 id）。
+3. 深层（`beyond`）每 5 层是守卫层，诅咒会叠（`iron` +40% HP、`swift` +25% 速度），助手只负责寻路与交互，难度仍需自己衡量停层。
+
