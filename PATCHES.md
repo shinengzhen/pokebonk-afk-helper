@@ -159,3 +159,69 @@ e.place(`tower`, ...,       { data:{ sub:`leave`  } })   // 屋顶下山
 | `sub==='leave'` 下山 | **永不点击**，避免提前退塔 |
 
 优先级 **-1.5**：低于地图传送门（-2），高于邦币（-1）和一切普通任务。标签会区分显示为「上楼楼梯 / 塔内祭坛献祭 / 塔顶传送门」。
+
+---
+
+## 3.3.6 — 跟进游戏更新（build `mw4qh5au`）
+
+> 上游 `Insomnia-7/pokebonk-afk-helper` 的 `main` **没有新提交**：仍是 `38c7a94`，与本分支的 fork 点相同；也没有新 tag、新分支或新的 PR。
+> 所以这一版完全是跟着**游戏本体**的更新走的。
+
+### 一、这次游戏变了什么（读包实测）
+
+| 项 | 0.8.89（`mvywlxn8`） | 现在（`mw4qh5au`） |
+|---|---|---|
+| 启动入口 | `assets/main-*.js` | 结构相同，入口 `main-D7EKZ9nc-mw4qh5au.js` |
+| 主模块 | — | `main-BhO0ff4G-mw4qh5au.js`（内含 `export{xS as App}` 与 `frameGap`） |
+| 资料模块 | — | `defineProperty-YtxLpqQz-mw4qh5au.js` |
+| 助手连接器 | 正常 | **三个正则仍全部命中**，无需改造 |
+
+新增的可交互物（`$b()` 图标表实读）：
+
+| kind / sub | 中文 | 说明 |
+|---|---|---|
+| `altar` + `data.comet` | 陨星碎片 | `spawnComet()` 落的 `altar`（`tier:4, comet:true, life:60`），**60 秒内不开始充能就熄灭** |
+| `exp` + `sub:'crate'` | 火箭队箱子 | 远征模式的战利品箱 |
+| `exp` + `sub:'vault'` | 古代密室 | 先叫醒守卫，打完才能开 |
+| `exp` + `sub:'exit'` | 撤离点 | 半径 6m，只在游戏的撤离窗口开启时可用，站进圈里读条 |
+| `tower` + `sub:'trick'` | 耿鬼墓碑 | 紫苑塔内「¿truco o trato?」抽奖 |
+| `shroom` | 弹跳蘑菇 | 弹跳踏板，无收益 |
+| `dojo` | 空手道馆 | 挑战成功后选祝福（弹窗流程） |
+| `comet`（图标键） | — | 只用于地图图标，不是 `kind`；真身是带 `data.comet` 的 `altar` |
+
+另外新见/新增三种对局状态：`coop`（合作）、`expedition`（远征）、`rifts`（裂缝）。
+
+### 二、本版加了什么
+
+1. **构建白名单**加入 `mw4qh5au`。
+2. **陨星碎片**：`altar` 分支先判 `data.comet`，**不再受「祭坛充能」开关限制**，优先级 **-1.9**（仅次于撤离点/传送门），半径 1.6–2.8m，开关 `autoComet`（默认开）。这类祭坛是纯驻留充能，不按 E。
+3. **远征（`exp`）**：箱子 / 密室按任务顺序走（默认插在 `tower` 之后），开关 `autoExpedition`（默认开）；撤离点**默认不动**（`autoExtract:false`），打开后只在 `expedition.openExit === 该物件` 或 `nextWindow().exit === 该物件` 时才前往，优先级 **-2.2**（高于传送门），并且不写黑名单、不按 E —— 撤离要求「留在圈内」读条。
+4. **远征结算弹窗**：出现「已撤离 / 倒在山谷中」时点「返回比尔的电脑」，不再被当成未识别弹窗干等 2 分钟。
+5. **紫苑塔墓碑**：显式识别为「塔内墓碑·抽奖」，开关 `autoTowerTrick`（默认开 = 保持 3.3.5 的实际行为）；`leave` 仍然永不点击。
+6. **任务顺序兜底**：存下来的旧 `taskOrder` 没有新 id 时，`indexOf` 返回 -1 会被算成优先级 2（抢在宝箱前面）。已改为缺失 id 沉到 99。
+7. **模式名**：连接日志现在显示 远征 / 紫苑塔 / 生存 / 经典。
+8. **不碰的东西**：`dojo`（弹窗挑战）、`shroom`（弹跳）、`challenge`、`coop` 对局都保持不动，只在控制台留一条 unknown-kind 记录。
+
+### 三、验证
+
+```bash
+node --check pokebonk-afk.user.js     # 语法
+node test/userscript.test.cjs         # 策略 / 优先级 / 连接器正则断言
+```
+
+`test/userscript.test.cjs` 把产物里的 `mapTaskPolicy` 与优先级表达式切出来，用假的 `run` / `settings` 跑：
+
+- 陨星碎片绕过 `autoAltar`、受 `autoComet` 控制；
+- 撤离点在窗口未开或 `autoExtract` 关闭时都不给目标；
+- 墓碑、楼梯、`leave` 的门控；
+- `dojo` / `shroom` / `challenge` / `cursed` 仍然不碰；
+- 优先级：撤离点 -2.2、陨星碎片 -1.9、传送门 -2、塔 -1.5、邦币 -1、旧任务顺序缺失 id 落 99。
+
+**未验证**：真机对局。3.3.6 的改动是静态读包 + 断言的结论，实际跑图（尤其远征撤离与墓碑抽奖）需要进游戏点一次。
+
+### 四、已知限制（延续）
+
+1. `src/` 仍未同步：仓库里的 `pokebonk-afk.user.js` 是构建产物，补丁以文本替换施加，脚本在 `F:\Pokebonk\pokebonk-afk\patch-3.3.6.cjs`。
+2. `coop` 合作对局没有适配（`run.endless` 为假，会被当成经典模式处理）。
+3. `dojo` 道馆挑战需要弹窗交互，未接入。
+4. 裂缝（`rifts`）内部没有特殊处理：进裂缝后仍按普通地图寻路。
