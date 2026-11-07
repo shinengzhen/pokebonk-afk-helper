@@ -21,8 +21,8 @@ function sliceBalanced(src, startMarker, open = '{', close = '}') {
 }
 
 /* ------------------------------------------------------------------ 1. 版本与构建白名单 */
-assert.ok(/@version\s+3\.3\.7/.test(js), '@version should be 3.3.7');
-assert.ok(/__pbAfkVersion='3\.3\.7'/.test(js), 'runtime version marker should be 3.3.7');
+assert.ok(/@version\s+3\.3\.8/.test(js), '@version should be 3.3.8');
+assert.ok(/__pbAfkVersion='3\.3\.8'/.test(js), 'runtime version marker should be 3.3.8');
 const builds = /const SUPPORTED_BUILDS = new Set\(\[([^\]]*)\]\)/.exec(js)[1];
 for (const b of ['mvob1c8t', 'mvpdimhl', 'mvpjh5lt', 'mvpt1dlr', 'mvxmqseg', 'mvywlxn8', 'mw4qh5au']) {
   assert.ok(builds.includes("'" + b + "'"), 'build whitelisted: ' + b);
@@ -155,6 +155,70 @@ assert.strictEqual(policy(portal, { ...S, autoTowerDeep: false }, towerRun({ roo
 assert.strictEqual(policy(portal, S, towerRun({ roof: true, state: 'roof' })), null,
   'portal waits for the roof fight to end');
 console.log('ok  tower: stairs / altar / trick / portal / leave gating');
+
+/* ------------------------------------------------------------------ 3.7 圣地：直冲 + 按 E */
+// 3.7.1 规划失败分支：圣地不拉黑、直接怼过去；其它目标照旧拉黑
+const fallbackBlock = sliceBalanced(js, 'if(!result){', '{', '}');
+function runFallback(kind, routePathImpl) {
+  const state = { path: [], pathGoal: null, target: { label: '目标' }, mode: '' };
+  const skipped = new Map();
+  const logs = [];
+  const next = { kind, label: kind === 'shrine' ? '圣地' : '宝箱', x: 0, z: 0, radius: 2.6, ref: { kind } };
+  const body = `
+    let path=state.path, pathGoal=state.pathGoal, target=state.target, mode=state.mode;
+    (function(){ ${fallbackBlock} })();
+    state.path=path; state.pathGoal=pathGoal; state.target=target; state.mode=mode;
+  `;
+  const fn = new Function('result', 'routePath', 'p', 'next', 'run', 'hazards', 'skipped', 'log', 'now', 'state', body);
+  fn(null, routePathImpl, { x: 0, z: 10 }, next, { player: { radius: 0.35 }, terrain: {} }, [], skipped, m => logs.push(m), 1000, state);
+  return { state, skipped, logs };
+}
+
+const alwaysNull = () => null;
+const shrineFail = runFallback('shrine', alwaysNull);
+assert.deepStrictEqual(shrineFail.state.path, [{ x: 0, z: 0 }], 'shrine falls back to a direct drive');
+assert.strictEqual(shrineFail.state.mode, '直冲 圣地', 'shrine reports 直冲圣地');
+assert.strictEqual(shrineFail.skipped.size, 0, 'shrine is never blacklisted');
+assert.ok(!shrineFail.logs.some(l => l.includes('暂时无法到达')), 'shrine does not log unreachable');
+
+const chestFail = runFallback('chest', alwaysNull);
+assert.strictEqual(chestFail.skipped.size, 1, 'other kinds still get blacklisted');
+assert.strictEqual(chestFail.state.path.length, 0, 'other kinds drop the target');
+assert.ok(chestFail.logs.some(l => l.includes('暂时无法到达')), 'other kinds log unreachable');
+
+// 3.7.2 环形重试现在会放大半径：第一个可达环命中就用它
+const ringHit = runFallback('chest', () => [{ x: 3, z: 3 }]);
+assert.deepStrictEqual(ringHit.state.path, [{ x: 3, z: 3 }], 'ring retry path is adopted');
+assert.strictEqual(ringHit.skipped.size, 0, 'no blacklist when a ring hits');
+
+// 3.7.3 半径内有未使用的圣地就直接按 E（不依赖 nearest）
+const tapBlockStart = js.indexOf('try{const pl=run.interactables.list||[];');
+const tapEnd = js.indexOf('}catch(e){}', tapBlockStart);
+assert.ok(tapBlockStart > 0 && tapEnd > tapBlockStart, 'shrine E-press block found');
+const tapBlock = js.slice(tapBlockStart, tapEnd + '}catch(e){}'.length);
+function runShrineTap(list, now, sharedWindow) {
+  const taps = [];
+  const logs = [];
+  const win = sharedWindow || {};
+  const fn = new Function('run', 'tap', 'releaseKeys', 'log', 'window', 'performance', tapBlock);
+  fn(
+    { player: { pos: { x: 0, z: 0 } }, interactables: { list } },
+    k => { taps.push(k); return true; }, () => {}, m => logs.push(m),
+    win, { now: () => now }
+  );
+  return { taps, logs, win };
+}
+const nearShrine = { kind: 'shrine', used: false, r: 2.6, x: 3, z: 0 };
+const tap1 = runShrineTap([nearShrine], 100000);
+assert.deepStrictEqual(tap1.taps, ['KeyE'], 'presses E next to an unused shrine');
+assert.ok(tap1.logs.some(l => l.includes('触摸圣地')), 'logs the shrine touch');
+assert.deepStrictEqual(runShrineTap([{ ...nearShrine, x: 5 }], 100000).taps, [], 'out of range: no E');
+assert.deepStrictEqual(runShrineTap([{ ...nearShrine, used: true }], 100000).taps, [], 'used shrine: no E');
+const tap2 = runShrineTap([nearShrine], 100500, tap1.win);
+assert.deepStrictEqual(tap2.taps, [], 'throttled inside 800ms');
+const tap3 = runShrineTap([nearShrine], 101000, tap1.win);
+assert.deepStrictEqual(tap3.taps, ['KeyE'], 'presses again after the throttle window');
+console.log('ok  shrine: direct drive fallback + radius-based E press');
 
 /* ------------------------------------------------------------------ 4.1 下楼优先级 */
 assert.strictEqual(prio({ kind: 'tower', data: { sub: 'leave' } }, false, order), -2.4,
