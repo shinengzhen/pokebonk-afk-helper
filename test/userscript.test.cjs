@@ -21,8 +21,8 @@ function sliceBalanced(src, startMarker, open = '{', close = '}') {
 }
 
 /* ------------------------------------------------------------------ 1. 版本与构建白名单 */
-assert.ok(/@version\s+3\.3\.8/.test(js), '@version should be 3.3.8');
-assert.ok(/__pbAfkVersion='3\.3\.8'/.test(js), 'runtime version marker should be 3.3.8');
+assert.ok(/@version\s+3\.3\.9/.test(js), '@version should be 3.3.9');
+assert.ok(/__pbAfkVersion='3\.3\.9'/.test(js), 'runtime version marker should be 3.3.9');
 const builds = /const SUPPORTED_BUILDS = new Set\(\[([^\]]*)\]\)/.exec(js)[1];
 for (const b of ['mvob1c8t', 'mvpdimhl', 'mvpjh5lt', 'mvpt1dlr', 'mvxmqseg', 'mvywlxn8', 'mw4qh5au']) {
   assert.ok(builds.includes("'" + b + "'"), 'build whitelisted: ' + b);
@@ -219,6 +219,66 @@ assert.deepStrictEqual(tap2.taps, [], 'throttled inside 800ms');
 const tap3 = runShrineTap([nearShrine], 101000, tap1.win);
 assert.deepStrictEqual(tap3.taps, ['KeyE'], 'presses again after the throttle window');
 console.log('ok  shrine: direct drive fallback + radius-based E press');
+
+/* ------------------------------------------------------------------ 3.8 圣地分两段 + 脱困 */
+// 3.8.1 圣地：>6m 交给 A*（不短路），<=6m 才直冲
+const shrineLine = (() => {
+  const a = js.indexOf("if(next.kind==='shrine'){const dd=");
+  assert.ok(a > 0, 'shrine planning line found');
+  let i = js.indexOf('{', a), depth = 0;
+  for (; i < js.length; i++) {
+    if (js[i] === '{') depth++;
+    else if (js[i] === '}') { depth--; if (depth === 0) return js.slice(a, i + 1); }
+  }
+  throw new Error('unbalanced shrine line');
+})();
+function planShrine(dd) {
+  const state = { path: [], pathGoal: null, mode: '' };
+  const fn = new Function('p', 'next', 'state', `
+    let path=state.path, pathGoal=state.pathGoal, mode=state.mode;
+    (function(){ ${shrineLine} })();
+    return { path, pathGoal, mode };
+  `);
+  return fn({ x: 0, z: dd }, { kind: 'shrine', label: '圣地', x: 0, z: 0, radius: 2.6 }, state);
+}
+const farPlan = planShrine(10);
+assert.deepStrictEqual(farPlan.path, [], 'far away: no direct drive, A* is left in charge');
+assert.strictEqual(farPlan.mode, '', 'far away: mode untouched');
+const nearPlan = planShrine(4);
+assert.deepStrictEqual(nearPlan.path, [{ x: 0, z: 0 }], 'close in: direct drive');
+assert.strictEqual(nearPlan.mode, '贴近圣地 4m', 'close in: mode reports the distance');
+
+// 3.8.2 脱困：无位移 1.2 秒就横移，方向与目标轴正交，左右交替
+assert.ok(js.includes('let unstickDir=0,unstickUntil=0,unstickTries=0;'), 'unstick state declared');
+assert.ok(js.includes('if(tnow<unstickUntil){drive(movementKeys(Math.cos(unstickDir),Math.sin(unstickDir),run.camYaw))'),
+  'unstick drives a sideways vector');
+assert.ok(!js.includes('now-lastMotion.at>2200&&now-jumpAt>1800'), 'jump-only stuck handler is gone');
+const trigBlock = sliceBalanced(js, 'else if(tnow-lastMotion.at>1200){', '{', '}');
+function triggerUnstick(tries, px, pz, tx, tz) {
+  const state = { unstickDir: 0, unstickUntil: 0, unstickTries: tries, path: [{ x: 1, z: 1 }], lastPlan: 99, tapCount: 0 };
+  const body = `
+    let path=state.path, lastPlan=state.lastPlan, unstickDir=state.unstickDir, unstickUntil=state.unstickUntil, unstickTries=state.unstickTries;
+    const tnow=5000, target={label:'圣地',x:${tx},z:${tz}}, p={x:${px},z:${pz}};
+    let lastMotion={x:${px},z:${pz},at:1000}, jumpAt=0;
+    const tap=()=>{state.tapCount++;}, log=()=>{};
+    if(false){}${trigBlock}
+    state.unstickDir=unstickDir; state.unstickUntil=unstickUntil; state.unstickTries=unstickTries; state.path=path; state.lastPlan=lastPlan;
+  `;
+  new Function('state', body)(state);
+  return state;
+}
+const u1 = triggerUnstick(0, 0, 10, 0, 0);
+assert.strictEqual(u1.unstickTries, 1, 'tries incremented');
+assert.ok(Math.abs(u1.unstickUntil - 5700) < 1, 'escape window is 700ms');
+assert.strictEqual(u1.path.length, 0, 'path cleared so it replans');
+assert.strictEqual(u1.lastPlan, 0, 'planning throttle reset');
+const awayAngle = Math.atan2(10 - 0, 0 - 0);            // 玩家在目标正南
+const diff = Math.abs(((u1.unstickDir - awayAngle) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI);
+assert.ok(Math.abs(diff - Math.PI / 2) < 0.4, 'escape direction is perpendicular to the target axis, got ' + diff.toFixed(2));
+const u2 = triggerUnstick(1, 0, 10, 0, 0);
+const diff2 = Math.abs(((u2.unstickDir - awayAngle) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI);
+assert.ok(Math.abs(diff2 - Math.PI / 2) < 0.4, 'second escape still perpendicular (mirrored side)');
+console.log('ok  shrine two-stage approach + unstick wiggle');
 
 /* ------------------------------------------------------------------ 4.1 下楼优先级 */
 assert.strictEqual(prio({ kind: 'tower', data: { sub: 'leave' } }, false, order), -2.4,

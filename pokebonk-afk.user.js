@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéBonk 无尽挂机助手·完整配置版
 // @namespace    local.pokebonk.afk
-// @version      3.3.8
+// @version      3.3.9
 // @description  地图任务寻路、宝可梦配置计划、复制道具、商店与抽奖预算。F8 开关。
 // @match        https://pokebonk.com/*
 // @run-at       document-idle
@@ -11,7 +11,7 @@
 // @grant        none
 // ==/UserScript==
 (function () {
-'use strict';window.__pbAfkVersion='3.3.8';
+'use strict';window.__pbAfkVersion='3.3.9';
 window.__pbDump=()=>{const r=window.__pbRun;if(!r)return'no run';const p=r.player.pos,l=r.interactables.list||[];console.table(l.map(o=>({kind:o.kind,used:o.used,sealed:o.data&&o.data.sealed,r:o.r,x:+(o.x||0).toFixed(1),z:+(o.z||0).toFixed(1),d:+Math.hypot((o.x||0)-p.x,(o.z||0)-p.z).toFixed(1),data:JSON.stringify(o.data??null).slice(0,90)})));return l.length+' items | stageTime='+Math.round(r.stageTime)+' | stage='+r.stage};
 window.__pbReport=false;
 setInterval(()=>{return;const r=window.__pbRun;if(!r)return;try{const p=r.player.pos;const d={v:window.__pbAfkVersion,stage:r.stage,stageTime:Math.round(r.stageTime),mode:r.mode,endless:!!r.endless,items:(r.interactables.list||[]).map(o=>({kind:o.kind,used:o.used,sealed:o.data&&o.data.sealed,r:o.r,x:+(o.x||0).toFixed(1),z:+(o.z||0).toFixed(1),d:+Math.hypot((o.x||0)-p.x,(o.z||0)-p.z).toFixed(1),data:JSON.stringify(o.data??null).slice(0,220)}))};if(typeof GM_xmlhttpRequest==='function')GM_xmlhttpRequest({method:'POST',url:'about:blank',data:JSON.stringify(d),headers:{'Content-Type':'application/json'}});}catch(e){}},8000);
@@ -775,7 +775,7 @@ const next=candidates[0];
  if(dist<=next.radius){path=[];return;}
  if(now-lastPlan>1500&&(!path.length||!pathGoal||Math.hypot(next.x-pathGoal.x,next.z-pathGoal.z)>4)){
   lastPlan=now;const hazards=opt.avoidHazards?(run.endless?.hazards?.list||[]):[];
-  if(next.kind==='shrine'){path=[{x:next.x,z:next.z}];pathGoal={x:next.x,z:next.z};mode='直冲圣地';return;}
+  if(next.kind==='shrine'){const dd=Math.hypot(p.x-next.x,p.z-next.z);if(dd<=6){path=[{x:next.x,z:next.z}];pathGoal={x:next.x,z:next.z};mode='贴近圣地 '+Math.round(dd*10)/10+'m';return;}}
   const result=routePath(p,{...next,bodyRadius:run.player.radius},run.terrain,hazards);
   if(!result){
   let ok=null;const base=Math.max(1.5,Math.min(3.5,next.radius||2));
@@ -790,7 +790,7 @@ const next=candidates[0];
 function interact(run){
  try{const pl=run.interactables.list||[];for(const o of pl){if(o.used)continue;const pp=run.player.pos,dd=Math.hypot((o.x||0)-pp.x,(o.z||0)-pp.z);
   if(o.kind==='portal'&&dd<=Math.max(2.5,(o.r||2)+1.5)){releaseKeys();if(tap('KeyE'))log('进入传送门');return;}
-  if(o.kind==='shrine'&&dd<=Math.max(3.6,(o.r||2.6)+1)&&performance.now()-(window.__pbShrineTap||0)>800){window.__pbShrineTap=performance.now();releaseKeys();if(tap('KeyE'))log('触摸圣地（'+Math.round(dd*10)/10+'m）');return;}
+  if(o.kind==='shrine'&&dd<=Math.max(4.2,(o.r||2.6)+1.5)&&performance.now()-(window.__pbShrineTap||0)>800){window.__pbShrineTap=performance.now();releaseKeys();if(tap('KeyE'))log('触摸圣地（'+Math.round(dd*10)/10+'m）');return;}
  }}catch(e){}
  const cap=run.capture,ally=run.allies,nearest=run.interactables.nearest;
  if(cap.canThrow?.()&&captureWanted(cap)){releaseKeys();if(tap('KeyE'))log('投球：'+(cap.shiny||cap.classic?'异色':'永久收录')+'目标');return;}
@@ -804,11 +804,14 @@ function interact(run){
  }
 
 }
+let unstickDir=0,unstickUntil=0,unstickTries=0;
 function steer(){
  requestAnimationFrame(steer);
  const run=app?.run;
  if(!opt.enabled||editOpen||!run||run.state!=='play'||run.player.dead||!opt.autoMove||!target||!path.length||/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||'')){releaseKeys();return;}
  const p=run.player.pos;
+ const tnow=performance.now();
+ if(tnow<unstickUntil){drive(movementKeys(Math.cos(unstickDir),Math.sin(unstickDir),run.camYaw));if(Math.hypot(p.x-lastMotion.x,p.z-lastMotion.z)>1)lastMotion={x:p.x,z:p.z,at:tnow};return;}
  if(target.type==='capture'&&run.enemies.alive[target.index]){target.x=run.enemies.x[target.index];target.z=run.enemies.z[target.index];}
  const distance=Math.hypot(p.x-target.x,p.z-target.z);
  if(distance<=target.radius){releaseKeys();return;}
@@ -818,7 +821,7 @@ function steer(){
  drive(movementKeys(point.x-p.x,point.z-p.z,run.camYaw));
  const now=performance.now();
  if(Math.hypot(p.x-lastMotion.x,p.z-lastMotion.z)>1){lastMotion={x:p.x,z:p.z,at:now};}
- else if(now-lastMotion.at>2200&&now-jumpAt>1800){jumpAt=now;tap('Space');path=[];lastPlan=0;log('尝试跳跃并重算路线');}
+ else if(tnow-lastMotion.at>1200){unstickTries++;const away=Math.atan2(p.z-target.z,p.x-target.x);unstickDir=away+(unstickTries%2?1:-1)*Math.PI/2+(Math.random()-.5)*.6;unstickUntil=tnow+700;lastMotion={x:p.x,z:p.z,at:tnow};path=[];lastPlan=0;if(tnow-jumpAt>1800){jumpAt=tnow;tap('Space');}log('脱困：横移绕行 #'+unstickTries+'（'+target.label+'）');}
  if(now-targetAt>12000&&now-lastMotion.at>5000){if(target.kind==='portal'||target.kind==='shrine'||target.kind==='boss'){path=[];lastPlan=0;targetAt=now;log('被卡，强制重算：'+target.label);}else{if(target.ref&&typeof target.ref==='object')skipped.set(target.ref,now+30000);log('目标暂时卡住，跳过 '+target.label);target=null;path=[];releaseKeys();}}
 }
 function controlTick(){
