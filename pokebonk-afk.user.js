@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PokéBonk 无尽挂机助手·完整配置版
 // @namespace    local.pokebonk.afk
-// @version      3.3.34
+// @version      3.3.35
 // @description  地图任务寻路、宝可梦配置计划、复制道具、商店与抽奖预算。F8 开关。
 // @match        https://pokebonk.com/*
 // @run-at       document-idle
@@ -11,7 +11,7 @@
 // @grant        none
 // ==/UserScript==
 (function () {
-'use strict';window.__pbAfkVersion='3.3.34';
+'use strict';window.__pbAfkVersion='3.3.35';
 window.__pbDump=()=>{const r=window.__pbRun;if(!r)return'no run';const p=r.player.pos,l=r.interactables.list||[];console.table(l.map(o=>({kind:o.kind,used:o.used,sealed:o.data&&o.data.sealed,r:o.r,x:+(o.x||0).toFixed(1),z:+(o.z||0).toFixed(1),d:+Math.hypot((o.x||0)-p.x,(o.z||0)-p.z).toFixed(1),data:JSON.stringify(o.data??null).slice(0,90)})));return l.length+' items | stageTime='+Math.round(r.stageTime)+' | stage='+r.stage};
 window.__pbReport=false;
 setInterval(()=>{return;const r=window.__pbRun;if(!r)return;try{const p=r.player.pos;const d={v:window.__pbAfkVersion,stage:r.stage,stageTime:Math.round(r.stageTime),mode:r.mode,endless:!!r.endless,items:(r.interactables.list||[]).map(o=>({kind:o.kind,used:o.used,sealed:o.data&&o.data.sealed,r:o.r,x:+(o.x||0).toFixed(1),z:+(o.z||0).toFixed(1),d:+Math.hypot((o.x||0)-p.x,(o.z||0)-p.z).toFixed(1),data:JSON.stringify(o.data??null).slice(0,220)}))};if(typeof GM_xmlhttpRequest==='function')GM_xmlhttpRequest({method:'POST',url:'about:blank',data:JSON.stringify(d),headers:{'Content-Type':'application/json'}});}catch(e){}},8000);
@@ -596,7 +596,7 @@ function configure(){
  document.body.append(box);
 }
 window.addEventListener('keydown',e=>{if(e.code==='F8'){e.preventDefault();e.stopImmediatePropagation();if(!e.repeat&&!/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName||''))setEnabled(!opt.enabled);}},true);
-function getStatus(){return {helperVersion:'3.3.34',clientVersion:window.pokebonkDesktop?.version||null,catalogVersion:CATALOG.version,enabled:opt.enabled,connected:!!app,connectionState,plan:readBuildPlan(app?.run),pokemon:pokemonLabel(app?.run),build:document.querySelector('meta[name="pokebonk-build"]')?.content,mode,target:target?.label||null,ledger:{...ledger},choices,lastLog,stoppedReason,updateNotice};}
+function getStatus(){return {helperVersion:'3.3.35',clientVersion:window.pokebonkDesktop?.version||null,catalogVersion:CATALOG.version,enabled:opt.enabled,connected:!!app,connectionState,plan:readBuildPlan(app?.run),pokemon:pokemonLabel(app?.run),build:document.querySelector('meta[name="pokebonk-build"]')?.content,mode,target:target?.label||null,ledger:{...ledger},choices,lastLog,stoppedReason,updateNotice};}
 window.PokeBonkAFK={start:()=>setEnabled(true),stop:()=>setEnabled(false),configure,status:getStatus};
 updatePanel();
 
@@ -996,7 +996,7 @@ function interact(run){
  }
 
 }
-let unstickDir=0,unstickUntil=0,unstickTries=0;
+let unstickDir=0,unstickUntil=0,unstickTries=0;const stuckN=new Map;
 function steer(){
  requestAnimationFrame(steer);
  const run=app?.run;
@@ -1014,7 +1014,7 @@ function steer(){
  const now=performance.now();
  if(Math.hypot(p.x-lastMotion.x,p.z-lastMotion.z)>1){lastMotion={x:p.x,z:p.z,at:now};}
  else if(tnow-lastMotion.at>1200){unstickTries++;const away=Math.atan2(p.z-target.z,p.x-target.x);unstickDir=away+(unstickTries%2?1:-1)*Math.PI/2+(Math.random()-.5)*.6;unstickUntil=tnow+700;lastMotion={x:p.x,z:p.z,at:tnow};path=[];lastPlan=0;if(tnow-jumpAt>1800){jumpAt=tnow;tap('Space');}log('脱困：横移绕行 #'+unstickTries+'（'+target.label+'）');}
- if(now-targetAt>12000&&now-lastMotion.at>5000){if(target.kind==='portal'||target.kind==='shrine'||target.kind==='boss'){path=[];lastPlan=0;targetAt=now;log('被卡，强制重算：'+target.label);}else{if(target.ref&&typeof target.ref==='object')skipped.set(target.ref,now+30000);log('目标暂时卡住，跳过 '+target.label);target=null;path=[];releaseKeys();}}
+ if(now-targetAt>12000&&now-lastMotion.at>5000){const hard=['portal','shrine','boss'].includes(target.kind);const sk=(target.ref&&typeof target.ref==='object')?target.ref:(target.label||'?');const n=(stuckN.get(sk)||0)+1;stuckN.set(sk,n);if(stuckN.size>200)stuckN.clear();if(hard&&n<=6){path=[];lastPlan=0;targetAt=now;log('被卡，强制重算：'+target.label);}else{if(target.ref&&typeof target.ref==='object')skipped.set(target.ref,now+(hard?60000:30000));log('目标暂时卡住，跳过 '+target.label);target=null;path=[];releaseKeys();}}
 }
 function controlTick(){
  try{
